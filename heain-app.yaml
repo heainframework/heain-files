@@ -1,0 +1,30 @@
+# heain-files v1 (Step 4e, 2026-10-06): the file base app on heain-sdk v1.
+# Large files in chunks, each file under its own data key in heain-core's KMS
+# (delete = crypto-shred), on the local disk by default or an S3-compatible
+# store. The calling app owns what it uploads; others read only what it shares.
+manifest_version: 1
+app:
+  id: heain-files
+  version: 1.0.0
+  group: base
+  description: File base app -- chunked, per-file-key encrypted file storage (disk or S3-compatible) for other apps.
+  api: v1
+  sdk: {name: heain-sdk-go, version: ">=1.0.0"}
+capabilities:
+  - {name: files.write, version: 1, formal: true, execution: direct, ai: {used: false}, data_classes: [file]}
+  - {name: files.read, version: 1, formal: true, execution: direct, ai: {used: false}, data_classes: [file]}
+endpoints:
+  - {method: POST, path: /v1/files, capability: files.write, formal: true}
+  - {method: PUT, path: "/v1/files/{id}/chunks/{n}", capability: files.write, formal: true}
+  - {method: POST, path: "/v1/files/{id}/commit", capability: files.write, formal: true}
+  - {method: PUT, path: "/v1/files/{id}/sharing", capability: files.write, formal: true}
+  - {method: DELETE, path: "/v1/files/{id}", capability: files.write, formal: true}
+  - {method: GET, path: /v1/files, capability: files.read, formal: true}
+  - {method: GET, path: "/v1/files/{id}", capability: files.read, formal: true}
+  - {method: GET, path: "/v1/files/{id}/chunks/{n}", capability: files.read, formal: true}
+  - {method: GET, path: "/v1/files/{id}/content", capability: files.read, formal: true}
+data_classes:
+  - {name: file, sovereignty: node-local, encrypted_at_rest: true, crypto_shred: true}
+offline:
+  allowed: [files.write, files.read]
+  journal: none

@@ -1,0 +1,17 @@
+# heain-files under the heain conformance suite (heain-sdk conformance/).
+# Disk backend in the app's state directory; no other service needed.
+# The sample upload uses a caller-chosen id so the later calls can name it.
+manifest: heain-app.yaml
+build: [go, build, -o, heain-files, ./cmd/heain-files]
+start: [./heain-files, -backend, disk]
+port: 19490
+endpoints:
+  - {method: POST, path: /v1/files, body: {id: conf-file-0001, name: conformance-secret-filename.txt, content_type: text/plain, chunk_size: 65536}, expect: 200, secret: conformance-secret-filename}
+  - {method: PUT, path: /v1/files/conf-file-0001/chunks/0, body: {data: conformance-secret-content}, expect: 200, secret: conformance-secret-content}
+  - {method: POST, path: /v1/files/conf-file-0001/commit, body: {}, expect: 200}
+  - {method: GET, path: /v1/files/conf-file-0001, expect: 200}
+  - {method: GET, path: /v1/files/conf-file-0001/chunks/0, expect: 200}
+  - {method: GET, path: /v1/files/conf-file-0001/content, expect: 200}
+  - {method: GET, path: /v1/files, expect: 200}
+  - {method: PUT, path: /v1/files/conf-file-0001/sharing, body: {shared_with: [heain-qc]}, expect: 200}
+  - {method: DELETE, path: /v1/files/conf-file-0001, expect: 200}
