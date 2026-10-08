@@ -43,7 +43,12 @@ type File struct {
 	Size       int64    `json:"size"`
 	SHA256     string   `json:"sha256,omitempty"`
 	SharedWith []string `json:"shared_with,omitempty"`
+	// Instance is the heain-files instance that holds the file.
+	Instance string `json:"instance,omitempty"`
 }
+
+// Ref returns the file's reference.
+func (f *File) Ref() Ref { return Ref{Instance: f.Instance, ID: f.ID} }
 
 // Spec describes a new file.
 type Spec struct {

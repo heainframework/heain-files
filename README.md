@@ -72,3 +72,13 @@ backend only ever holds ciphertext.
 - Conformance: `heain-conformance run --app . --core ~/heain-core`.
 
 Not yet: a live run against a real S3-compatible store; range reads of the whole content.
+
+## Stage B-1e: range reads and data by reference (1.1, 2026-10-08)
+
+The author decided (2026-10-08) that large data travels by reference: a job names a heain-files file (and the part it needs) instead of carrying its bytes, and whoever processes it reads that range from heain-files and writes its result back as a stream. This closes "range reads of the whole content" above.
+
+- **Range reads.** `GET /v1/files/{id}/content` honours one `Range: bytes=a-b` / `a-` / `-n` (206 with `Content-Range`; 416 outside the file; no or several ranges: the whole file). Only the chunks the range covers are read and opened, and the answer is streamed: its formal audit event is written before the first byte (`streamed: true`), not after the whole file was buffered.
+- **Which instance.** Every file record carries `instance`, the heain-files instance that holds it, so an app on another node can name it.
+- **Across the zone.** The data class `file` is now `zone-local`: a file stays on the node that stored it, and apps on other nodes of the same zone read it there by range over mTLS (ownership and sharing unchanged); nothing goes past the zone (P7).
+- **Go client** (`client`): `Ref`; `Locate` (this node first, then every heain-files of the zone); `OpenRange` (a range as a stream); `UploadTo` (raw chunks as they are read, on a named instance); `DeleteRef`, `ShareRef`; `Loopback`, an `http://127.0.0.1` address behind an unguessable token for tools that read URLs by range (ffmpeg, ffprobe), answering only while the file is registered.
+- **Not yet:** a live run against a real S3-compatible store.

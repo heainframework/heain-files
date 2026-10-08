@@ -80,7 +80,7 @@ func main() {
 	}
 	defer st.Close()
 
-	a := &api.API{Store: st, Logf: log.Printf}
+	a := &api.API{Store: st, Instance: os.Getenv("HEAIN_INSTANCE"), Logf: log.Printf}
 	srv := app.NewServer()
 	if err := a.Register(srv); err != nil {
 		log.Fatal(err)

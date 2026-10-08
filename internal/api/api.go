@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -25,7 +26,26 @@ import (
 // API ties the store to the endpoints.
 type API struct {
 	Store *store.Store
-	Logf  func(string, ...any)
+	// Instance is this instance's id, given with every file record so a
+	// caller can name the file to an app on another node of the zone
+	// (Stage B-1e: data by reference).
+	Instance string
+	Logf     func(string, ...any)
+}
+
+// rec is a file record as answered: a copy carrying this instance's id.
+func (a *API) rec(f *store.File) *store.File {
+	c := *f
+	c.Instance = a.Instance
+	return &c
+}
+
+func (a *API) recs(fs []*store.File) []*store.File {
+	out := make([]*store.File, len(fs))
+	for i, f := range fs {
+		out[i] = a.rec(f)
+	}
+	return out
 }
 
 func reply(w http.ResponseWriter, status int, v any) {
@@ -115,7 +135,7 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) {
 		failErr(w, err)
 		return
 	}
-	reply(w, http.StatusOK, f)
+	reply(w, http.StatusOK, a.rec(f))
 }
 
 func (a *API) list(w http.ResponseWriter, r *http.Request) {
@@ -139,7 +159,7 @@ func (a *API) list(w http.ResponseWriter, r *http.Request) {
 	if fs == nil {
 		fs = []*store.File{}
 	}
-	reply(w, http.StatusOK, map[string]any{"files": fs})
+	reply(w, http.StatusOK, map[string]any{"files": a.recs(fs)})
 }
 
 func (a *API) get(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +172,7 @@ func (a *API) get(w http.ResponseWriter, r *http.Request) {
 		failErr(w, err)
 		return
 	}
-	reply(w, http.StatusOK, f)
+	reply(w, http.StatusOK, a.rec(f))
 }
 
 func chunkNo(w http.ResponseWriter, r *http.Request) (int, bool) {
@@ -248,10 +268,12 @@ func (a *API) commit(w http.ResponseWriter, r *http.Request) {
 		failErr(w, err)
 		return
 	}
-	reply(w, http.StatusOK, f)
+	reply(w, http.StatusOK, a.rec(f))
 }
 
-// content streams a committed file's whole content.
+// content streams a committed file's content, or one byte range of it
+// (Range: bytes=a-b, a-, or -n; one range), as it is read: only the chunks
+// the range covers are read and opened (Stage B-1e).
 func (a *API) content(w http.ResponseWriter, r *http.Request) {
 	app, ok := a.app(w, r)
 	if !ok {
@@ -267,26 +289,111 @@ func (a *API) content(w http.ResponseWriter, r *http.Request) {
 		failErr(w, store.ErrConflict)
 		return
 	}
+	from, to, partial, ok := byteRange(r.Header.Get("Range"), f.Size)
+	if !ok {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", f.Size))
+		fail(w, http.StatusRequestedRangeNotSatisfiable, "range_not_satisfiable", "the range is outside the file")
+		return
+	}
+	heain.StreamBody(w)
 	ct := f.ContentType
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
 	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Content-Length", strconv.FormatInt(f.Size, 10))
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Content-Length", strconv.FormatInt(to-from, 10))
 	w.Header().Set("X-Heain-File-Sha256", f.SHA256)
-	for i := range f.Chunks {
-		b, _, err := a.Store.ReadChunk(r.Context(), app, id, i)
+	status := http.StatusOK
+	if partial {
+		status = http.StatusPartialContent
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", from, to-1, f.Size))
+	}
+	if to == from {
+		w.WriteHeader(status)
+		return
+	}
+	cs := int64(f.ChunkSize)
+	started := false
+	for n := int(from / cs); n < len(f.Chunks) && int64(n)*cs < to; n++ {
+		b, _, err := a.Store.ReadChunk(r.Context(), app, id, n)
 		if err != nil {
-			if i == 0 {
+			if !started {
 				w.Header().Del("Content-Length")
+				w.Header().Del("Content-Range")
 				failErr(w, err)
 			}
-			a.logf("heain-files: content %s chunk %d: %v", id, i, err)
+			a.logf("heain-files: content %s chunk %d: %v", id, n, err)
 			return // a short body tells the client something went wrong
 		}
-		if _, err := w.Write(b); err != nil {
+		lo, hi := int64(0), int64(len(b))
+		if s := int64(n) * cs; s < from {
+			lo = from - s
+		}
+		if s := int64(n) * cs; s+hi > to {
+			hi = to - s
+		}
+		if !started {
+			w.WriteHeader(status)
+			started = true
+		}
+		_, err = w.Write(b[lo:hi])
+		wipe(b)
+		if err != nil {
 			return
 		}
+	}
+}
+
+// byteRange reads a Range header against size: [from, to), whether it is
+// a partial answer, and false when the range cannot be served (416). An
+// absent, malformed or multi-range header means the whole file.
+func byteRange(h string, size int64) (from, to int64, partial, ok bool) {
+	spec, found := strings.CutPrefix(strings.TrimSpace(h), "bytes=")
+	if !found || strings.Contains(spec, ",") {
+		return 0, size, false, true
+	}
+	a, b, found := strings.Cut(strings.TrimSpace(spec), "-")
+	if !found {
+		return 0, size, false, true
+	}
+	switch {
+	case a == "": // the last b bytes
+		n, err := strconv.ParseInt(b, 10, 64)
+		if err != nil || n < 0 {
+			return 0, size, false, true
+		}
+		if n == 0 {
+			return 0, 0, false, false
+		}
+		if n > size {
+			n = size
+		}
+		return size - n, size, true, true
+	default:
+		s, err := strconv.ParseInt(a, 10, 64)
+		if err != nil || s < 0 {
+			return 0, size, false, true
+		}
+		e := size - 1
+		if b != "" {
+			if e, err = strconv.ParseInt(b, 10, 64); err != nil || e < s {
+				return 0, size, false, true
+			}
+			if e > size-1 {
+				e = size - 1
+			}
+		}
+		if s >= size {
+			return 0, 0, false, false
+		}
+		return s, e + 1, true, true
+	}
+}
+
+func wipe(b []byte) {
+	for i := range b {
+		b[i] = 0
 	}
 }
 
@@ -306,7 +413,7 @@ func (a *API) share(w http.ResponseWriter, r *http.Request) {
 		failErr(w, err)
 		return
 	}
-	reply(w, http.StatusOK, f)
+	reply(w, http.StatusOK, a.rec(f))
 }
 
 func (a *API) delete(w http.ResponseWriter, r *http.Request) {

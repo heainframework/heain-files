@@ -87,6 +87,9 @@ type File struct {
 	CommittedAt *time.Time        `json:"committed_at,omitempty"`
 	ExpiresAt   *time.Time        `json:"expires_at,omitempty"`
 	Backend     string            `json:"backend"`
+	// Instance is set on answers only (the heain-files instance that holds
+	// the file), never stored.
+	Instance string `json:"instance,omitempty"`
 }
 
 // CanRead: the owner and the apps the file is shared with.
@@ -194,7 +197,9 @@ func (s *Store) get(tx *bolt.Tx, id string) (*File, error) {
 }
 
 func (s *Store) put(tx *bolt.Tx, f *File) error {
-	raw, _ := json.Marshal(f)
+	c := *f
+	c.Instance = ""
+	raw, _ := json.Marshal(&c)
 	return tx.Bucket(bFiles).Put([]byte(f.ID), s.inside.Seal(raw, []byte("file/"+f.ID)))
 }
 

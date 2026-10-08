@@ -2,10 +2,12 @@
 # Large files in chunks, each file under its own data key in heain-core's KMS
 # (delete = crypto-shred), on the local disk by default or an S3-compatible
 # store. The calling app owns what it uploads; others read only what it shares.
+# 1.1 (Stage B-1e, 2026-10-08): range reads of a file's content (Range: bytes=...), streamed;
+# every record names the instance that holds the file, so other nodes of the zone can read it by reference.
 manifest_version: 1
 app:
   id: heain-files
-  version: 1.0.0
+  version: 1.1.0
   group: base
   description: File base app -- chunked, per-file-key encrypted file storage (disk or S3-compatible) for other apps.
   api: v1
@@ -24,7 +26,7 @@ endpoints:
   - {method: GET, path: "/v1/files/{id}/chunks/{n}", capability: files.read, formal: true}
   - {method: GET, path: "/v1/files/{id}/content", capability: files.read, formal: true}
 data_classes:
-  - {name: file, sovereignty: node-local, encrypted_at_rest: true, crypto_shred: true}
+  - {name: file, sovereignty: zone-local, encrypted_at_rest: true, crypto_shred: true}
 offline:
   allowed: [files.write, files.read]
   journal: none
